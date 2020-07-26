@@ -293,7 +293,3 @@ def lambda_handler(event, context):
     LOGGER.info(f'[RETURN] {ret}')
     LOGGER.info('--LAMBDA END--')
     return ret
-
-
-if __name__ == '__main__':
-    help()
