@@ -110,7 +110,7 @@ def help() -> None:
         'messages': [
             {
                 "type": "flex",
-                "altText": "this is a flex message",
+                "altText": "コマンド一覧",
                 "contents": {
                     "type": "carousel",
                     "contents": bubbles
