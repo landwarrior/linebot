@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import re
 import traceback
 
 import requests
@@ -14,12 +15,14 @@ LOGGER.setLevel(logging.DEBUG)
 
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s [%(filename)s in %(lineno)d]')
+formatter = logging.Formatter(
+    '%(asctime)s [%(levelname)s] %(message)s [%(filename)s in %(lineno)d]')
 stream_handler.setFormatter(formatter)
 LOGGER.addHandler(stream_handler)
 
 # 日本時間に調整
-NOW = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
+NOW = datetime.datetime.now(datetime.timezone.utc) + \
+    datetime.timedelta(hours=9)
 
 # requests のユーザーエージェントを書き換えたい
 HEADER = {
@@ -28,9 +31,98 @@ Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Safari/537.36'''
 }
 
-HOTPEPPER = os.environ['hotpepper']
+HOTPEPPER = os.environ.get('hotpepper')
 
 TOKEN = ''
+
+
+def help() -> None:
+    """メソッド一覧."""
+    methods = [a for a in dir(MethodGroup) if '_' not in a]
+    bubbles = []
+    for _method in methods:
+        description = re.sub(' {1,}', '', getattr(MethodGroup, _method).__doc__)
+        args = re.split(r'\.\n', description)
+        title = args[0]
+        # 末尾の改行も含まれている
+        description = '\n'.join((''.join(args[1:])).split('\n')[1:])
+        bubbles.append({
+            "type": "bubble",
+            "size": "kilo",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": title,
+                        "color": "#ffffff",
+                        "align": "start",
+                        "size": "md",
+                        "gravity": "center"
+                    }
+                ],
+                "backgroundColor": "#27ACB2",
+                "paddingAll": "15px",
+                "action": {
+                    "type": "postback",
+                    "label": _method,
+                    "data": _method,
+                    "displayText": _method
+                }
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                          {
+                              "type": "text",
+                              "text": description,
+                              "color": "#8C8C8C",
+                              "size": "sm",
+                              "wrap": True
+                          }
+                        ],
+                        "flex": 1
+                    }
+                ],
+                "spacing": "md",
+                "paddingAll": "12px",
+            },
+            "styles": {
+                "footer": {
+                    "separator": False
+                }
+            }
+        })
+
+    headers = {
+        'Content-Type': 'application/json',
+        "Authorization": f"Bearer {os.environ['access_token']}",
+    }
+    url = 'https://api.line.me/v2/bot/message/reply'
+    payload = {
+        'replyToken': TOKEN,
+        'messages': [
+            {
+                "type": "flex",
+                "altText": "this is a flex message",
+                "contents": {
+                    "type": "carousel",
+                    "contents": bubbles
+                }
+            }
+        ]
+    }
+
+    res = requests.post(url, data=json.dumps(
+        payload).encode('utf-8'), headers=headers)
+    LOGGER.info(
+        f"[RESPONSE] [STATUS]{res.status_code} [HEADER]{res.headers} [CONTENT]{res.content}")
 
 
 class MethodGroup:
@@ -61,23 +153,11 @@ class MethodGroup:
         LOGGER.info(f"[RESPONSE] [STATUS]{res.status_code} [HEADER]{res.headers} [CONTENT]{res.content}")
 
     @staticmethod
-    def help(args: list) -> None:
-        """メソッド一覧."""
-        methods = [a for a in dir(MethodGroup) if '_' not in a]
-        if len(args) > 0 and getattr(MethodGroup, args[0], None):
-            message = getattr(MethodGroup, args[0]).__doc__.replace('    ', '')
-        else:
-            message = 'メソッド一覧 '
-            message += ', '.join(methods)
-        MethodGroup._send_data(message)
-
-    @staticmethod
     def lunch(args: list) -> None:
-        """ランチ営業しているところを検索します.
+        """ランチ営業店舗検索.
 
-        引数なし、もしくは一つの場合はデフォルト座標の近くでキーワード検索します。
-        引数を2つ以上指定した場合、それらでキーワード検索します。
-        この時のキーワードには場所も含まれます。
+        lunchコマンドの後にスペース区切りで二つ以上キーワードを入力すると場所での検索も可能です。
+        一つの場合はデフォルト座標付近での検索となります。
         """
         _param = {
             'key': HOTPEPPER,
@@ -103,13 +183,16 @@ class MethodGroup:
             shop = random.choice(shops)
             message = f'{shop["name"]}\n{shop["urls"]["pc"]}\n'
         else:
-            message = '検索結果がありません'
+            message = '検索結果がありません\n'
         message += '　　Powered by ホットペッパー Webサービス'
         MethodGroup._send_data(message)
 
     @staticmethod
     def qiita(args: list) -> None:
-        """Qiita の新着を3つ教えてくれます."""
+        """Qiita新着記事取得.
+
+        qiitaコマンドでQiitaの新着記事を3件取得します。
+        """
         res = requests.get('https://qiita.com/api/v2/items?page=1&per_page=3',
                            headers=HEADER)
         data = res.json()
@@ -121,11 +204,10 @@ class MethodGroup:
 
     @staticmethod
     def nomitai(args: list) -> None:
-        """どこに飲みに行くのか決めてくれます.
+        """居酒屋検索.
 
-        引数なし、もしくは一つの場合は溜池山王辺りを中心にしてキーワード検索します。
-        引数を2つ以上指定した場合、それらでキーワード検索します。
-        キーワードには場所も含まれます。
+        nomitaiコマンドの後にスペース区切りで二つ以上キーワードを入力すると場所での検索も可能です。
+        一つの場合はデフォルト座標付近での検索となります。
         """
         _param = {
             'key': HOTPEPPER,
@@ -154,7 +236,7 @@ class MethodGroup:
             headers=HEADER)
         shops = hotpepper.json()['results']['shop']
         if len(shops) == 0:
-            message = '検索結果がありません'
+            message = '検索結果がありません\n'
         else:
             shop = random.choice(shops)
             message = f"{shop['name']}\n{shop['urls']['pc']}\n"
@@ -176,9 +258,14 @@ def lambda_handler(event, context):
         for event in body.get('events', []):
             TOKEN = event.get('replyToken', '')
             text = event.get('message', {}).get('text')
+            # postback の場合はメソッドのデフォルトで動作するように設定
+            if event.get('postback', {}).get('data'):
+                text = event['postback']['data']
         text = text.replace('　', ' ')
         args = text.split(' ')
-        if (len(args) > 0 and getattr(MethodGroup, args[0], None)):
+        if args[0] == 'コマンド':
+            help()
+        elif (len(args) > 0 and getattr(MethodGroup, args[0], None)):
             LOGGER.info(f"method: {args[0]}, param: {args[1:]}")
             getattr(MethodGroup, args[0])(args[1:])
 
@@ -206,3 +293,7 @@ def lambda_handler(event, context):
     LOGGER.info(f'[RETURN] {ret}')
     LOGGER.info('--LAMBDA END--')
     return ret
+
+
+if __name__ == '__main__':
+    help()
