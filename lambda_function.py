@@ -6,6 +6,7 @@ import os
 import random
 import re
 import traceback
+import xml.etree.ElementTree as ET
 
 import requests
 from bs4 import BeautifulSoup
@@ -133,7 +134,6 @@ class MethodGroup:
         """LINE へ送信.
 
         :param str message: メッセージ
-        :param str token: 応答トークン
         """
         headers = {
             'Content-Type': 'application/json',
@@ -242,6 +242,170 @@ class MethodGroup:
             message = f"{shop['name']}\n{shop['urls']['pc']}\n"
         message += '　　Powered by ホットペッパー Webサービス'
         MethodGroup._send_data(message)
+
+    @staticmethod
+    def itsEvents(args: list) -> None:
+        """関東ITソフトウェア健康保険組合のイベント情報を返します.
+
+        滅多に更新されないので見る価値ないかも。
+        """
+        ret = requests.get('https://www.its-kenpo.or.jp/NEWS/event_rss.xml',
+                           headers=HEADER)
+        root = ET.fromstring(ret.content.decode('utf8'))
+        msg = []
+        for child in root[0]:
+            if 'item' in child.tag.lower():
+                msg.append(f'{child[0].text}\n{child[1].text}')
+        message = '関東ITソフトウェア健康保険組合のイベント情報です\n'
+        message += '\n'.join(msg)
+        MethodGroup._send_data(message)
+
+    @staticmethod
+    def yahoo(args: list) -> None:
+        """ヤフーニュースを取得します.
+
+        主要なヤフーニュースにのみ対応しています。
+        """
+        ret = requests.get('https://news.yahoo.co.jp', headers=HEADER)
+        # utf8 以外だったら以下みたいにデコードする
+        # html = ret.content.decode('sjis')
+        yahoo = BeautifulSoup(ret.text, 'html.parser')
+        topics = yahoo.select('ul.topicsList_main')[0].select('li>a')
+        message = '主要なニュースをお伝えします\n'
+        msg = []
+        for topic in topics:
+            msg.append(f"{topic.text}\n{topic.get('href')}")
+        message += '\n'.join(msg)
+        MethodGroup._send_data(message)
+
+    @staticmethod
+    def itmediaYesterday(args: list) -> None:
+        """ITmediaの昨日のニュースをお伝えします.
+
+        無ければ無いって言います。
+        """
+        yesterday = NOW - datetime.timedelta(days=1)
+        s_yd = f'{yesterday.year}年{yesterday.month}月{yesterday.day}日'
+        url = f"https://www.itmedia.co.jp/news/subtop/archive/{yesterday.strftime('%Y%m')[2:]}.html"
+        ret = requests.get(url, headers=HEADER)
+        site = BeautifulSoup(ret.content.decode('sjis'), 'html.parser')
+        root = site.select('div.colBoxBacknumber')[
+            0].select('div.colBoxInner>div')
+        message = '【 ITmediaの昨日のニュース一覧 】\n'
+        msg = []
+        for i, item in enumerate(root):
+            if 'colBoxSubhead' in item.get('class', []) and item.text == s_yd:
+                for a in root[i + 1].select('ul>li'):
+                    msg.append(
+                        f"{a.select('a')[0].text}\nhttps:{a.select('a')[0].get('href')}")
+                break
+        if len(msg) > 0:
+            message += '\n'.join(msg)
+        else:
+            message = 'ITmediaの昨日のニュースはありませんでした。'
+        MethodGroup._send_data(message)
+
+    @staticmethod
+    async def zdJapan(args: list) -> None:
+        """ZDNet Japanの昨日のニュースを取得.
+
+        無ければ無いって言います。
+        """
+        yesterday = NOW - datetime.timedelta(days=1)
+        s_yd = yesterday.strftime('%Y-%m-%d')
+        base = 'https://japan.zdnet.com'
+        url = base + '/archives/'
+        ret = requests.get(url, headers=HEADER)
+        site = BeautifulSoup(ret.content.decode('utf8'), 'html.parser')
+        root = site.select('div.pg-mod')
+        message = '【 ZDNet Japanの昨日のニュース一覧 】\n'
+        msg = []
+        for div in root:
+            span = div.select('h2.ttl-line-center>span')
+            if span and span[0].text == '最新記事一覧':
+                for li in div.select('ul>li'):
+                    if s_yd in li.select('p.txt-update')[0].text:
+                        anchor = li.select('a')[0]
+                        msg.append(
+                            f"{anchor.text}\n{base + anchor.get('href')}")
+                break
+        if len(msg) > 0:
+            message += '\n'.join(msg)
+        else:
+            message = 'ZDNet Japanの昨日のニュースはありませんでした。'
+        MethodGroup._send_data(message)
+
+    @staticmethod
+    def weeklyReport(args: list) -> None:
+        """JPCERT から Weekly Report を取得.
+
+        水曜日とかじゃないと何も返ってきません。
+        """
+        url = 'https://www.jpcert.or.jp'
+        today = NOW.strftime('%Y-%m-%d')
+        ret = requests.get(url, headers=HEADER)
+        jpcert = BeautifulSoup(ret.content.decode('utf-8'), 'html.parser')
+        whatsdate = jpcert.select('a.fl')[0].text.replace('号', '')
+        if today == whatsdate:
+            message = f"【 JPCERT の Weekly Report {jpcert.select('a.fl')[0].text} 】\n"
+            message += url + jpcert.select('a.fl')[0].get('href') + '\n'
+            wkrp = jpcert.select('div.contents')[0].select('li')
+            for i, item in enumerate(wkrp, start=1):
+                message += f"{i}. {item.text}\n"
+            MethodGroup._send_data(message)
+
+    @staticmethod
+    def noticeAlert(*args) -> None:
+        """当日発表の注意喚起もしくは脆弱性関連情報を取得.
+
+        何もなきゃ何も言いません。
+        """
+        url = 'https://www.jpcert.or.jp'
+        today = NOW.strftime('%Y-%m-%d')
+        yesterday = NOW - datetime.timedelta(days=1)
+        # 12:00 に実行するので、前日の 11:59 以降をデータ取得対象にする
+        yesterday = datetime.datetime(
+            yesterday.year,
+            yesterday.month,
+            yesterday.day,
+            11, 59, 59
+        )
+        ret = requests.get(url, headers=HEADER)
+        jpcert = BeautifulSoup(ret.content.decode('utf-8'), 'html.parser')
+        items = jpcert.select('div.container')
+        notice = '【 JPCERT の直近の注意喚起 】\n'
+        warning = '【 JPCERT の直近の脆弱性関連情報 】\n'
+        notice_list = []
+        warning_list = []
+        for data in items:
+            if data.select('h3') and data.select('h3')[0].text == '注意喚起':
+                for li in data.select('ul.list>li'):
+                    published = li.select('a')[0].select(
+                        'span.left_area')[0].text
+                    title = li.select('a')[0].select('span.right_area')[0].text
+                    if today in published:
+                        link = url + li.select('a')[0].get('href')
+                        notice_list.append(f"{today} {title} {link}")
+                    if yesterday.strftime('%Y-%m-%d') in published:
+                        link = url + li.select('a')[0].get('href')
+                        notice_list.append(
+                            f"{yesterday.strftime('%Y-%m-%d')} {title} {link}")
+            if data.select('h3') and data.select('h3')[0].text == '脆弱性関連情報':
+                for li in data.select('ul.list>li'):
+                    published = li.select('a')[0].select(
+                        'span.left_area')[0].text.strip()
+                    dt_published = datetime.datetime.strptime(
+                        published, '%Y-%m-%d %H:%M')
+                    title = li.select('a')[0].select('span.right_area')[0].text
+                    if yesterday <= dt_published:
+                        link = li.select('a')[0].get('href')
+                        warning_list.append(f"{title} {link}")
+        if len(notice_list) > 0:
+            notice += '\n'.join(notice_list)
+            MethodGroup._send_data(notice)
+        if len(warning_list) > 0:
+            warning += '\n'.join(warning_list)
+            MethodGroup._send_data(warning)
 
 
 def lambda_handler(event, context):
